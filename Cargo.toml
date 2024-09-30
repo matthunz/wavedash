@@ -3,4 +3,9 @@ name = "wavedash"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = [".", "example", "wavedash-guest"]
+
 [dependencies]
+bevy = "0.14.2"
+wasmer = "4.3.7"
