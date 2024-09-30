@@ -1,6 +1,6 @@
+use wavedash_guest::{log, App};
+
 #[no_mangle]
 fn main() {
-    wavedash_guest::log("Hello, World!");
-
-    wavedash_guest::world_resource("x");
+    log(App::current().world_mut().resource("x").to_string());
 }

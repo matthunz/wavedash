@@ -1,6 +1,6 @@
-use bevy::{ecs::world::World, prelude::Resource, time::Time, utils::HashMap};
+use bevy::{ecs::world::World, prelude::Resource, utils::HashMap};
 use serde::Serialize;
-use std::{any::TypeId, ffi::CString, fs};
+use std::{ffi::CString, fs};
 use wasmer::{
     imports, AsStoreRef, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, MemoryView,
     Module, Store, TypedFunction, WasmPtr,
