@@ -4515,6 +4515,7 @@ dependencies = [
  "bevy",
  "serde",
  "serde_json",
+ "slotmap",
  "wasmer",
  "wavedash-core",
 ]

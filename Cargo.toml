@@ -10,5 +10,6 @@ members = [".", "example", "crates/wavedash-core", "crates/wavedash-guest", "cra
 bevy = "0.14.2"
 serde = "1.0.210"
 serde_json = "1.0.128"
+slotmap = "1.0.7"
 wasmer = "4.3.7"
 wavedash-core = { path = "crates/wavedash-core" }

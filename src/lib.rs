@@ -1,6 +1,7 @@
 use bevy::{prelude::*, utils::HashMap};
 use serde::Serialize;
-use std::{ffi::CString, fs, sync::Arc};
+use slotmap::{DefaultKey, SlotMap};
+use std::{ffi::CString, sync::Arc};
 use wasmer::{
     imports, AsStoreRef, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, MemoryView,
     Module, Store, TypedFunction, WasmPtr,
@@ -9,7 +10,7 @@ use wavedash_core::Named;
 
 #[derive(Resource)]
 pub struct Runtime {
-    instance: Instance,
+    instances: SlotMap<DefaultKey, Instance>,
     store: Store,
     env: FunctionEnv<Env>,
 }
@@ -17,12 +18,9 @@ pub struct Runtime {
 impl Runtime {
     pub fn new(
         resources: HashMap<String, Arc<dyn Fn(&mut World) -> String + Send + Sync>>,
+        modules: impl IntoIterator<Item = Vec<u8>>,
     ) -> Self {
         let mut store = Store::default();
-
-        let wasm = fs::read("target/wasm32-unknown-unknown/debug/example.wasm").unwrap();
-        let module = Module::new(&store, wasm).unwrap();
-
         let env = FunctionEnv::new(
             &mut store,
             Env {
@@ -31,38 +29,47 @@ impl Runtime {
                 resources,
             },
         );
-        let log_fn = Function::new_typed_with_env(&mut store, &env, log);
-        let world_fn = Function::new_typed_with_env(&mut store, &env, world_resource);
-        let import_object = imports! {
-            "wavedash" => {
-                "_log" => log_fn,
-                "_world_resource" => world_fn,
-            }
-        };
 
-        let instance = Instance::new(&mut store, &module, &import_object).unwrap();
-        let memory = instance.exports.get_memory("memory").unwrap();
-        env.as_mut(&mut store).set_memory(memory.clone());
+        let mut instances = SlotMap::new();
+
+        for wasm in modules {
+            let module = Module::new(&store, wasm).unwrap();
+
+            let log_fn = Function::new_typed_with_env(&mut store, &env, log);
+            let world_fn = Function::new_typed_with_env(&mut store, &env, world_resource);
+            let import_object = imports! {
+                "wavedash" => {
+                    "_log" => log_fn,
+                    "_world_resource" => world_fn,
+                }
+            };
+
+            let instance = Instance::new(&mut store, &module, &import_object).unwrap();
+            let memory = instance.exports.get_memory("memory").unwrap();
+            env.as_mut(&mut store).set_memory(memory.clone());
+
+            instances.insert(instance);
+        }
 
         Self {
-            instance,
+            instances,
             store,
             env,
         }
     }
 
     pub fn run(&mut self, world: &mut World) {
-        let main: TypedFunction<(), ()> = self
-            .instance
-            .exports
-            .get_function("main")
-            .unwrap()
-            .typed(&mut self.store)
-            .unwrap();
-
         self.env.as_mut(&mut self.store).world = world as _;
 
-        main.call(&mut self.store).unwrap();
+        for instance in self.instances.values_mut() {
+            let main: TypedFunction<(), ()> = instance
+                .exports
+                .get_function("main")
+                .unwrap()
+                .typed(&mut self.store)
+                .unwrap();
+            main.call(&mut self.store).unwrap();
+        }
     }
 }
 
@@ -130,11 +137,17 @@ fn world_resource(mut ctx: FunctionEnvMut<Env>, msg: u32, msg_len: u32) -> u32 {
 #[derive(Default)]
 pub struct RuntimePlugin {
     resources: HashMap<String, Arc<dyn Fn(&mut World) -> String + Send + Sync>>,
+    modules: SlotMap<DefaultKey, Vec<u8>>,
 }
 
 impl RuntimePlugin {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn module(mut self, bytes: Vec<u8>) -> Self {
+        self.modules.insert(bytes);
+        self
     }
 
     pub fn resource<T>(mut self) -> Self
@@ -154,8 +167,11 @@ impl RuntimePlugin {
 
 impl Plugin for RuntimePlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Runtime::new(self.resources.clone()))
-            .add_systems(Update, run_runtime);
+        app.insert_resource(Runtime::new(
+            self.resources.clone(),
+            self.modules.values().cloned(),
+        ))
+        .add_systems(Update, run_runtime);
     }
 }
 
