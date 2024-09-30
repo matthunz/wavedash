@@ -1,15 +1,75 @@
-use bevy::{ecs::world::World, prelude::Resource, utils::HashMap};
+use bevy::{prelude::*, utils::HashMap};
 use serde::Serialize;
-use std::{ffi::CString, fs};
+use std::{borrow::Cow, ffi::CString, fs, sync::Arc};
 use wasmer::{
     imports, AsStoreRef, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, MemoryView,
     Module, Store, TypedFunction, WasmPtr,
 };
+use wavedash_core::Named;
+
+#[derive(Resource)]
+pub struct Runtime {
+    instance: Instance,
+    store: Store,
+    env: FunctionEnv<Env>,
+}
+
+impl Runtime {
+    pub fn new(
+        resources: HashMap<String, Arc<dyn Fn(&mut World) -> String + Send + Sync>>,
+    ) -> Self {
+        let mut store = Store::default();
+
+        let wasm = fs::read("target/wasm32-unknown-unknown/debug/example.wasm").unwrap();
+        let module = Module::new(&store, wasm).unwrap();
+
+        let env = FunctionEnv::new(
+            &mut store,
+            Env {
+                memory: None,
+                world: std::ptr::null_mut(),
+                resources,
+            },
+        );
+        let log_fn = Function::new_typed_with_env(&mut store, &env, log);
+        let world_fn = Function::new_typed_with_env(&mut store, &env, world_resource);
+        let import_object = imports! {
+            "wavedash" => {
+                "_log" => log_fn,
+                "_world_resource" => world_fn,
+            }
+        };
+
+        let instance = Instance::new(&mut store, &module, &import_object).unwrap();
+        let memory = instance.exports.get_memory("memory").unwrap();
+        env.as_mut(&mut store).set_memory(memory.clone());
+
+        Self {
+            instance,
+            store,
+            env,
+        }
+    }
+
+    pub fn run(&mut self, world: &mut World) {
+        let main: TypedFunction<(), ()> = self
+            .instance
+            .exports
+            .get_function("main")
+            .unwrap()
+            .typed(&mut self.store)
+            .unwrap();
+
+        self.env.as_mut(&mut self.store).world = world as _;
+
+        main.call(&mut self.store).unwrap();
+    }
+}
 
 pub struct Env {
     memory: Option<Memory>,
     world: *mut World,
-    resources: HashMap<String, Box<dyn FnMut(&mut World) -> String>>,
+    resources: HashMap<String, Arc<dyn Fn(&mut World) -> String + Send + Sync>>,
 }
 
 unsafe impl Send for Env {}
@@ -67,53 +127,58 @@ fn world_resource(mut ctx: FunctionEnvMut<Env>, msg: u32, msg_len: u32) -> u32 {
     start as _
 }
 
+#[derive(Default)]
+pub struct RuntimePlugin {
+    resources: HashMap<String, Arc<dyn Fn(&mut World) -> String + Send + Sync>>,
+}
+
+impl RuntimePlugin {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn resource<T: Named>(mut self) -> Self {
+        self.resources.insert(
+            String::from("x"),
+            Arc::new(|world: &mut World| {
+                let res = world.get_resource::<X>().unwrap();
+                serde_json::to_string(res).unwrap()
+            }),
+        );
+        self
+    }
+}
+
+impl Plugin for RuntimePlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(Runtime::new(self.resources.clone()))
+            .add_systems(Update, run_runtime);
+    }
+}
+
+fn run_runtime(world: &mut World) {
+    let world_ptr = world as *mut _;
+    let mut rt = world.get_resource_mut::<Runtime>().unwrap();
+    dbg!("run!");
+    unsafe { rt.run(&mut *world_ptr) };
+}
+
 #[derive(Serialize, Resource)]
 struct X(i32);
 
+impl Named for X {
+    fn name() -> Cow<'static, str> {
+        Cow::Borrowed("x")
+    }
+}
+
 fn main() {
-    let mut store = Store::default();
+    App::new()
+        .add_plugins(RuntimePlugin::new().resource::<X>())
+        .add_systems(Startup, setup)
+        .run();
+}
 
-    let wasm = fs::read("target/wasm32-unknown-unknown/debug/example.wasm").unwrap();
-    let module = Module::new(&store, wasm).unwrap();
-
-    let mut world = World::new();
-    world.insert_resource(X(42));
-
-    let mut resources: HashMap<String, Box<dyn FnMut(&mut World) -> String>> = HashMap::new();
-    resources.insert(
-        String::from("x"),
-        Box::new(|world: &mut World| {
-            let res = world.get_resource::<X>().unwrap();
-            serde_json::to_string(res).unwrap()
-        }),
-    );
-
-    let env = FunctionEnv::new(
-        &mut store,
-        Env {
-            memory: None,
-            world: &mut world as _,
-            resources,
-        },
-    );
-    let log_fn = Function::new_typed_with_env(&mut store, &env, log);
-    let world_fn = Function::new_typed_with_env(&mut store, &env, world_resource);
-    let import_object = imports! {
-        "wavedash" => {
-            "_log" => log_fn,
-            "_world_resource" => world_fn,
-        }
-    };
-
-    let instance = Instance::new(&mut store, &module, &import_object).unwrap();
-    let memory = instance.exports.get_memory("memory").unwrap();
-    env.as_mut(&mut store).set_memory(memory.clone());
-
-    let main: TypedFunction<(), ()> = instance
-        .exports
-        .get_function("main")
-        .unwrap()
-        .typed(&mut store)
-        .unwrap();
-    main.call(&mut store).unwrap();
+fn setup(mut commands: Commands) {
+    commands.insert_resource(X(42));
 }
