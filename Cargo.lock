@@ -2026,6 +2026,7 @@ dependencies = [
 name = "example"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "wavedash-guest",
 ]
 
@@ -4517,10 +4518,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wavedash-core"
+version = "0.1.0"
+
+[[package]]
 name = "wavedash-guest"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
+ "wavedash-core",
 ]
 
 [[package]]

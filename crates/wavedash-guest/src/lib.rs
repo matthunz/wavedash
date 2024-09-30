@@ -1,5 +1,8 @@
-use std::ffi::{CStr, CString};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::ffi::{CStr, CString};
+
+pub use wavedash_core::Named;
 
 #[link(wasm_import_module = "wavedash")]
 extern "C" {
@@ -36,7 +39,11 @@ pub struct World {
 }
 
 impl World {
-    pub fn resource(&self, name: impl AsRef<str>) -> Value {
+    pub fn resource<T: Named + DeserializeOwned>(&self) -> T {
+        T::deserialize(self.resource_by_id(T::name())).unwrap()
+    }
+
+    pub fn resource_by_id(&self, name: impl AsRef<str>) -> Value {
         let s = CString::new(name.as_ref()).unwrap();
 
         let cstr = unsafe {
