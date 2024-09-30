@@ -1,8 +1,7 @@
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::ffi::{CStr, CString};
-
-pub use wavedash_core::Named;
+use wavedash_core::Named;
 
 #[link(wasm_import_module = "wavedash")]
 extern "C" {

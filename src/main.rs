@@ -1,17 +1,10 @@
 use bevy::prelude::*;
 use serde::Serialize;
-use std::borrow::Cow;
 use wavedash::RuntimePlugin;
 use wavedash_core::Named;
 
-#[derive(Serialize, Resource)]
+#[derive(Serialize, Resource, Named)]
 struct X(i32);
-
-impl Named for X {
-    fn name() -> Cow<'static, str> {
-        Cow::Borrowed("x")
-    }
-}
 
 fn main() {
     App::new()

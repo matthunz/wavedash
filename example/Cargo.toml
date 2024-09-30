@@ -7,5 +7,6 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
+wavedash-core = { path = "../crates/wavedash-core" }
 wavedash-guest = { path = "../crates/wavedash-guest" }
 serde = { version = "1.0.210", features = ["derive"] }

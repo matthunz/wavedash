@@ -142,7 +142,7 @@ impl RuntimePlugin {
         T: Named + Resource + Serialize,
     {
         self.resources.insert(
-            String::from("x"),
+            T::name().to_string(),
             Arc::new(|world: &mut World| {
                 let res = world.get_resource::<T>().unwrap();
                 serde_json::to_string(res).unwrap()

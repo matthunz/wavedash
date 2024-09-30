@@ -4,3 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+wavedash-core-macros = { path = "../wavedash-core-macros" }

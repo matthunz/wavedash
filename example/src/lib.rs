@@ -1,14 +1,9 @@
-use std::borrow::Cow;
-use wavedash_guest::{log, App, Named};
+use serde::Deserialize;
+use wavedash_core::Named;
+use wavedash_guest::{log, App};
 
-#[derive(serde::Deserialize)]
+#[derive(Deserialize, Named)]
 struct X(i32);
-
-impl Named for X {
-    fn name() -> Cow<'static, str> {
-        Cow::Borrowed("x")
-    }
-}
 
 #[no_mangle]
 fn main() {
