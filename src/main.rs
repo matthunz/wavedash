@@ -1,5 +1,6 @@
-use bevy::ecs::world::World;
-use std::fs;
+use bevy::{ecs::world::World, prelude::Resource, time::Time, utils::HashMap};
+use serde::Serialize;
+use std::{any::TypeId, ffi::CString, fs};
 use wasmer::{
     imports, AsStoreRef, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, MemoryView,
     Module, Store, TypedFunction, WasmPtr,
@@ -8,6 +9,7 @@ use wasmer::{
 pub struct Env {
     memory: Option<Memory>,
     world: *mut World,
+    resources: HashMap<String, Box<dyn FnMut(&mut World) -> String>>,
 }
 
 unsafe impl Send for Env {}
@@ -36,14 +38,37 @@ fn log(ctx: FunctionEnvMut<Env>, msg: u32, msg_len: u32) {
     dbg!(s);
 }
 
-fn world_resource(ctx: FunctionEnvMut<Env>, msg: u32, msg_len: u32) -> u32 {
+fn world_resource(mut ctx: FunctionEnvMut<Env>, msg: u32, msg_len: u32) -> u32 {
     let view = ctx.data().view(&ctx);
+    let memory_size = view.data_size() as usize;
+
     let s = WasmPtr::<u8>::new(msg)
         .read_utf8_string(&view, msg_len)
         .unwrap();
-    dbg!(s);
-    0
+
+    let env = ctx.data_mut();
+    let f = env.resources.get_mut(&s).unwrap();
+
+    let world = unsafe { &mut *env.world };
+    let res = CString::new(f(world)).unwrap();
+
+    let view = ctx.data().view(&ctx);
+    let start = view.data_size() as usize;
+
+    if start + res.count_bytes() > memory_size {
+        let delta = (start + res.count_bytes() - memory_size) / wasmer::WASM_PAGE_SIZE + 1;
+        let memory = ctx.data().get_memory().clone();
+        memory.grow(&mut ctx, delta as u32).unwrap();
+    }
+
+    let view = ctx.data().view(&ctx);
+    view.write(start as _, res.as_bytes_with_nul()).unwrap();
+
+    start as _
 }
+
+#[derive(Serialize, Resource)]
+struct X(i32);
 
 fn main() {
     let mut store = Store::default();
@@ -52,12 +77,23 @@ fn main() {
     let module = Module::new(&store, wasm).unwrap();
 
     let mut world = World::new();
+    world.insert_resource(X(42));
+
+    let mut resources: HashMap<String, Box<dyn FnMut(&mut World) -> String>> = HashMap::new();
+    resources.insert(
+        String::from("x"),
+        Box::new(|world: &mut World| {
+            let res = world.get_resource::<X>().unwrap();
+            serde_json::to_string(res).unwrap()
+        }),
+    );
 
     let env = FunctionEnv::new(
         &mut store,
         Env {
             memory: None,
             world: &mut world as _,
+            resources,
         },
     );
     let log_fn = Function::new_typed_with_env(&mut store, &env, log);

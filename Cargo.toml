@@ -8,4 +8,6 @@ members = [".", "example", "wavedash-guest"]
 
 [dependencies]
 bevy = "0.14.2"
+serde = "1.0.210"
+serde_json = "1.0.128"
 wasmer = "4.3.7"

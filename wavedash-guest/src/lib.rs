@@ -1,4 +1,4 @@
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 
 #[link(wasm_import_module = "wavedash")]
 extern "C" {
@@ -14,5 +14,12 @@ pub fn log(msg: impl AsRef<str>) {
 
 pub fn world_resource(msg: impl AsRef<str>) {
     let s = CString::new(msg.as_ref()).unwrap();
-    unsafe { _world_resource(s.as_ptr() as _, s.as_bytes().len() as _) };
+
+    unsafe {
+        let ptr = _world_resource(s.as_ptr() as _, s.count_bytes() as _);
+        let cstr = CStr::from_ptr(ptr as _);
+        log(cstr.to_str().unwrap());
+    };
+
+    log("B");
 }
