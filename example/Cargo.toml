@@ -3,4 +3,9 @@ name = "wavedash-example"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+crate-type = ["cdylib"]
+
 [dependencies]
+wavedash = { path = "../" }
+wavedash-core = { path = "../crates/core" }
