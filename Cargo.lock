@@ -4518,6 +4518,7 @@ dependencies = [
 name = "wavedash-example"
 version = "0.1.0"
 dependencies = [
+ "bevy_ecs",
  "wavedash",
  "wavedash-core",
 ]
@@ -4528,6 +4529,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
+ "serde",
  "serde_json",
  "wasmer",
  "wavedash-core",

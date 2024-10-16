@@ -7,5 +7,6 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
+bevy_ecs = "0.14.2"
 wavedash = { path = "../" }
 wavedash-core = { path = "../crates/core" }

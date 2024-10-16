@@ -33,6 +33,14 @@ extern "C" fn __wavedash_alloc(len: i32) -> i32 {
         .unwrap()
 }
 
+#[no_mangle]
+extern "C" fn __wavedash_run_system(id: i32) {
+    let mut app = unsafe { App::current() };
+    RUNTIME
+        .try_with(|rt| rt.borrow_mut().systems.get_mut(&id).unwrap()(&mut app.world))
+        .unwrap();
+}
+
 fn request(req: &Request) -> Response {
     let s = CString::new(serde_json::to_string(req).unwrap()).unwrap();
     let ptr = unsafe { __wavedash_request(s.as_ptr() as _, s.as_bytes().len() as i32) };
@@ -57,17 +65,64 @@ pub fn log(s: impl fmt::Display) {
     request(&Request::Log(s.to_string()));
 }
 
+struct Runtime {
+    systems: HashMap<i32, Box<dyn FnMut(&mut World)>>,
+    next_id: i32,
+}
+
+thread_local! {
+    static RUNTIME: RefCell<Runtime> = RefCell::new(Runtime {
+        systems: HashMap::new(),
+        next_id: 0,
+    });
+}
+
 pub struct App {
-    _priv: (),
+    world: World,
 }
 
 impl App {
     pub unsafe fn current() -> Self {
-        App { _priv: () }
+        App {
+            world: World { _priv: () },
+        }
+    }
+
+    pub fn world_mut(&mut self) -> &mut World {
+        &mut self.world
+    }
+
+    pub fn add_system<Marker, F>(&mut self, label: impl TypePath, mut system: F)
+    where
+        F: WasmSystemParamFunction<Marker> + 'static,
+    {
+        RUNTIME
+            .try_with(|rt| {
+                let mut rt = rt.borrow_mut();
+
+                let id = rt.next_id;
+                rt.next_id += 1;
+
+                rt.systems.insert(
+                    id,
+                    Box::new(move |world| {
+                        let param = unsafe { F::Params::from_wasm_world(world) };
+                        system.run(param);
+                    }),
+                );
+            })
+            .unwrap();
     }
 }
 
-impl App {
+#[derive(TypePath)]
+pub struct Update;
+
+pub struct World {
+    _priv: (),
+}
+
+impl World {
     pub fn resource<R>(&self) -> R
     where
         R: Resource + TypePath + DeserializeOwned,
@@ -93,7 +148,7 @@ impl App {
             Response::Resource(json) => ResourceMut {
                 resource: serde_json::from_value(json).unwrap(),
                 type_path,
-                _app: self,
+                _world: self,
             },
             _ => unimplemented!(),
         }
@@ -103,7 +158,7 @@ impl App {
 pub struct ResourceMut<'a, R: Serialize> {
     resource: R,
     type_path: String,
-    _app: &'a mut App,
+    _world: &'a mut World,
 }
 
 impl<R: Serialize> Deref for ResourceMut<'_, R> {
@@ -126,5 +181,90 @@ impl<R: Serialize> Drop for ResourceMut<'_, R> {
             type_path: self.type_path.clone(),
             value: serde_json::to_value(&self.resource).unwrap(),
         });
+    }
+}
+
+pub trait WasmSystemParam {
+    type Item<'w>;
+
+    unsafe fn from_wasm_world(world: &mut World) -> Self::Item<'_>;
+}
+
+pub struct Res<R> {
+    pub resource: R,
+}
+
+impl<R> WasmSystemParam for Res<R>
+where
+    R: Resource + TypePath + DeserializeOwned,
+{
+    type Item<'w> = Res<R>;
+
+    unsafe fn from_wasm_world(world: &mut World) -> Self::Item<'_> {
+        Res {
+            resource: world.resource(),
+        }
+    }
+}
+
+pub struct ResMut<'w, R: Serialize> {
+    resource: ResourceMut<'w, R>,
+}
+
+impl<R: Serialize> Deref for ResMut<'_, R> {
+    type Target = R;
+
+    fn deref(&self) -> &Self::Target {
+        &self.resource
+    }
+}
+
+impl<R: Serialize> DerefMut for ResMut<'_, R> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.resource
+    }
+}
+
+impl<R> WasmSystemParam for ResMut<'_, R>
+where
+    R: Resource + TypePath + DeserializeOwned + Serialize,
+{
+    type Item<'w> = ResMut<'w, R>;
+
+    unsafe fn from_wasm_world(world: &mut World) -> Self::Item<'_> {
+        ResMut {
+            resource: world.resource_mut(),
+        }
+    }
+}
+
+impl<T: WasmSystemParam> WasmSystemParam for (T,) {
+    type Item<'w> = T::Item<'w>;
+
+    unsafe fn from_wasm_world(world: &mut World) -> Self::Item<'_> {
+        T::from_wasm_world(world)
+    }
+}
+
+pub trait WasmSystemParamFunction<Marker> {
+    type Params: WasmSystemParam;
+
+    fn run(&mut self, params: <Self::Params as WasmSystemParam>::Item<'_>);
+}
+
+impl<F, P> WasmSystemParamFunction<P> for F
+where
+    for<'a> &'a mut F: FnMut(P) + FnMut(P::Item<'_>),
+    F: Send + Sync + 'static,
+    P: WasmSystemParam,
+{
+    type Params = P;
+
+    fn run(&mut self, params: <Self::Params as WasmSystemParam>::Item<'_>) {
+        fn call<P>(mut f: impl FnMut(P), params: P) {
+            f(params);
+        }
+
+        call(self, params);
     }
 }
