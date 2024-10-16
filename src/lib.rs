@@ -250,33 +250,48 @@ where
     }
 }
 
-impl<T: WasmSystemParam> WasmSystemParam for (T,) {
-    type Item<'w> = T::Item<'w>;
-
-    unsafe fn from_wasm_world(world: &mut World) -> Self::Item<'_> {
-        T::from_wasm_world(world)
-    }
-}
-
 pub trait WasmSystemParamFunction<Marker> {
     type Params: WasmSystemParam;
 
     fn run(&mut self, params: <Self::Params as WasmSystemParam>::Item<'_>);
 }
 
-impl<F, P> WasmSystemParamFunction<P> for F
-where
-    for<'a> &'a mut F: FnMut(P) + FnMut(P::Item<'_>),
-    F: Send + Sync + 'static,
-    P: WasmSystemParam,
-{
-    type Params = P;
+macro_rules! impl_tuples {
+    ($($params:tt),*) => {
+        impl<$($params: WasmSystemParam),*> WasmSystemParam for ($($params,)*) {
+            type Item<'w> = ($($params::Item<'w>,)*);
 
-    fn run(&mut self, params: <Self::Params as WasmSystemParam>::Item<'_>) {
-        fn call<P>(mut f: impl FnMut(P), params: P) {
-            f(params);
+            unsafe fn from_wasm_world(world: &mut World) -> Self::Item<'_> {
+                let ptr = world as *mut _;
+                ($($params::from_wasm_world(&mut *ptr),)*)
+            }
         }
 
-        call(self, params);
-    }
+        impl<F, $($params : WasmSystemParam),*> WasmSystemParamFunction<fn(($($params,)*))> for F
+        where
+            for<'a> &'a mut F: FnMut($($params),*) + FnMut($($params::Item<'_>),*),
+            F: Send + Sync + 'static,
+
+        {
+            type Params = ($($params,)*);
+
+            fn run(&mut self, params: <Self::Params as WasmSystemParam>::Item<'_>) {
+                #[allow(non_snake_case)]
+                fn call<$($params),*>(mut f: impl FnMut($($params),*), ($($params,)*): ($($params,)*)) {
+                    f($($params),*);
+                }
+
+                call(self, params);
+            }
+        }
+    };
 }
+
+impl_tuples!(P1);
+impl_tuples!(P1, P2);
+impl_tuples!(P1, P2, P3);
+impl_tuples!(P1, P2, P3, P4);
+impl_tuples!(P1, P2, P3, P4, P5);
+impl_tuples!(P1, P2, P3, P4, P5, P6);
+impl_tuples!(P1, P2, P3, P4, P5, P6, P7);
+impl_tuples!(P1, P2, P3, P4, P5, P6, P7, P8);
