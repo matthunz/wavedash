@@ -71,8 +71,6 @@ fn request(mut ctx: FunctionEnvMut<Env>, input_ptr: u32, input_len: u32) -> u32 
     let input = read_string(&view, input_ptr, input_len).unwrap();
     let req: Request = serde_json::from_str(&input).unwrap();
 
-    dbg!(&req);
-
     let res = match req {
         Request::Log(s) => {
             println!("{}", s);
@@ -88,15 +86,31 @@ fn request(mut ctx: FunctionEnvMut<Env>, input_ptr: u32, input_len: u32) -> u32 
                 .get_resource_id(type_registration.type_id())
                 .unwrap();
             let ptr = data.world.get_resource_by_id(component_id).unwrap();
-            let x: &ExampleResource = unsafe { ptr.deref() };
+            let value: &ExampleResource = unsafe { ptr.deref() };
 
-            let json = serde_json::to_value(x).unwrap();
+            let json = serde_json::to_value(value).unwrap();
             Response::Resource(json)
+        }
+        Request::SetResource { type_path, value } => {
+            let registry = data.world.get_resource::<AppTypeRegistry>().unwrap();
+            let registry_ref = registry.read();
+            let type_registration = registry_ref.get_with_type_path(&type_path).unwrap();
+            let component_id = data
+                .world
+                .components()
+                .get_resource_id(type_registration.type_id())
+                .unwrap();
+            drop(registry_ref);
+
+            let mut ptr = data.world.get_resource_mut_by_id(component_id).unwrap();
+            let target: &mut ExampleResource = unsafe { ptr.as_mut().deref_mut() };
+            *target = serde_json::from_value(value).unwrap();
+
+            Response::Empty
         }
     };
 
     let json = serde_json::to_string(&res).unwrap();
-    dbg!(&json);
     let buf = CString::new(json).unwrap().into_bytes_with_nul();
 
     let values = data
@@ -105,9 +119,10 @@ fn request(mut ctx: FunctionEnvMut<Env>, input_ptr: u32, input_len: u32) -> u32 
         .unwrap()
         .call(&mut store, &[Value::I32(buf.len() as i32)])
         .unwrap();
-    let ptr = values[0].i32().unwrap();
 
     let view = data.memory.as_ref().unwrap().view(&store);
+
+    let ptr = values[0].i32().unwrap();
     view.write(ptr as _, &buf).unwrap();
 
     ptr as u32

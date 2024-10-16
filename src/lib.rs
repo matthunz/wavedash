@@ -1,10 +1,12 @@
 use bevy_ecs::system::Resource;
 use bevy_reflect::TypePath;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::fmt;
+use std::ops::{Deref, DerefMut};
 use wavedash_core::{Request, Response};
 
 #[link(wasm_import_module = "__wavedash__")]
@@ -55,17 +57,74 @@ pub fn log(s: impl fmt::Display) {
     request(&Request::Log(s.to_string()));
 }
 
-pub fn resource<R>() -> R
-where
-    R: Resource + TypePath + DeserializeOwned,
-{
-    let type_path = R::type_path().to_string();
-    let res = request(&Request::GetResource { type_path });
-    match res {
-        Response::Resource(json) => {
-            log(&json);
-            serde_json::from_value(json).unwrap()
+pub struct App {
+    _priv: (),
+}
+
+impl App {
+    pub unsafe fn current() -> Self {
+        App { _priv: () }
+    }
+}
+
+impl App {
+    pub fn resource<R>(&self) -> R
+    where
+        R: Resource + TypePath + DeserializeOwned,
+    {
+        let type_path = R::type_path().to_string();
+        let res = request(&Request::GetResource { type_path });
+        match res {
+            Response::Resource(json) => serde_json::from_value(json).unwrap(),
+            _ => unimplemented!(),
         }
-        _ => unimplemented!(),
+    }
+
+    pub fn resource_mut<R>(&mut self) -> ResourceMut<R>
+    where
+        R: Resource + DeserializeOwned + Serialize + TypePath,
+    {
+        let type_path = R::type_path().to_string();
+        let res = request(&Request::GetResource {
+            type_path: type_path.clone(),
+        });
+
+        match res {
+            Response::Resource(json) => ResourceMut {
+                resource: serde_json::from_value(json).unwrap(),
+                type_path,
+                _app: self,
+            },
+            _ => unimplemented!(),
+        }
+    }
+}
+
+pub struct ResourceMut<'a, R: Serialize> {
+    resource: R,
+    type_path: String,
+    _app: &'a mut App,
+}
+
+impl<R: Serialize> Deref for ResourceMut<'_, R> {
+    type Target = R;
+
+    fn deref(&self) -> &Self::Target {
+        &self.resource
+    }
+}
+
+impl<R: Serialize> DerefMut for ResourceMut<'_, R> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.resource
+    }
+}
+
+impl<R: Serialize> Drop for ResourceMut<'_, R> {
+    fn drop(&mut self) {
+        request(&Request::SetResource {
+            type_path: self.type_path.clone(),
+            value: serde_json::to_value(&self.resource).unwrap(),
+        });
     }
 }

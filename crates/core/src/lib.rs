@@ -7,6 +7,7 @@ use serde_json::Value;
 pub enum Request {
     Log(String),
     GetResource { type_path: String },
+    SetResource { type_path: String, value: Value },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
