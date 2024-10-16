@@ -1,5 +1,5 @@
+use wavedash_example_core::ExampleResource;
 use wavedash::{App, ResMut, Update};
-use wavedash_core::ExampleResource;
 
 #[no_mangle]
 extern "C" fn run() {

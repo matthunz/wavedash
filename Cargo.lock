@@ -4508,8 +4508,6 @@ dependencies = [
 name = "wavedash-core"
 version = "0.1.0"
 dependencies = [
- "bevy_ecs",
- "bevy_reflect",
  "serde",
  "serde_json",
 ]
@@ -4518,9 +4516,27 @@ dependencies = [
 name = "wavedash-example"
 version = "0.1.0"
 dependencies = [
- "bevy_ecs",
+ "bevy",
+ "wavedash-example-core",
+ "wavedash-host",
+]
+
+[[package]]
+name = "wavedash-example-client"
+version = "0.1.0"
+dependencies = [
  "wavedash",
- "wavedash-core",
+ "wavedash-example-core",
+]
+
+[[package]]
+name = "wavedash-example-core"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "bevy_reflect",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

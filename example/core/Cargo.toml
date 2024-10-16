@@ -1,8 +1,10 @@
 [package]
-name = "wavedash-core"
+name = "wavedash-example-core"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bevy_ecs = "0.14.2"
+bevy_reflect = { version = "0.14.2", no-default-features = true }
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.128"

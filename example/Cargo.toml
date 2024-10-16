@@ -3,10 +3,7 @@ name = "wavedash-example"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-crate-type = ["cdylib"]
-
 [dependencies]
-bevy_ecs = "0.14.2"
-wavedash = { path = "../" }
-wavedash-core = { path = "../crates/core" }
+wavedash-example-core = { path = "core" }
+bevy = "0.14.2"
+wavedash-host = { path = "../crates/host" }

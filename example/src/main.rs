@@ -1,10 +1,9 @@
 use bevy::prelude::*;
-use wavedash_core::ExampleResource;
+use wavedash_example_core::ExampleResource;
 use wavedash_host::WavedashPlugin;
 
 fn main() {
-    let module =
-        include_bytes!("../../../target/wasm32-unknown-unknown/debug/wavedash_example.wasm");
+    let module = include_bytes!("../../target/wasm32-unknown-unknown/debug/wavedash_example_client.wasm");
 
     App::new()
         .add_plugins((
