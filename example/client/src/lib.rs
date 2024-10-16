@@ -1,12 +1,12 @@
-use wavedash_example_core::ExampleResource;
 use wavedash::{App, ResMut, Update};
+use wavedash_example_core::ExampleResource;
 
-#[no_mangle]
-extern "C" fn run() {
-    let mut app = unsafe { App::current() };
+#[wavedash::main]
+fn main() {
+    App::current().add_system(Update, on_update);
+}
 
-    app.add_system(Update, |mut example: ResMut<ExampleResource>| {
-        example.value += 1;
-        wavedash::dbg(&*example);
-    });
+fn on_update(mut example: ResMut<ExampleResource>) {
+    example.value += 1;
+    wavedash::dbg(&*example);
 }

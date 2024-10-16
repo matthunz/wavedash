@@ -4502,6 +4502,7 @@ dependencies = [
  "serde",
  "serde_json",
  "wavedash-core",
+ "wavedash-macros",
 ]
 
 [[package]]
@@ -4549,6 +4550,15 @@ dependencies = [
  "serde_json",
  "wasmer",
  "wavedash-core",
+]
+
+[[package]]
+name = "wavedash-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.79",
 ]
 
 [[package]]

@@ -9,6 +9,8 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use wavedash_core::{Request, Response};
 
+pub use wavedash_macros::main;
+
 #[link(wasm_import_module = "__wavedash__")]
 extern "C" {
     fn __wavedash_log(ptr: i32, len: i32) -> i32;
@@ -35,7 +37,7 @@ extern "C" fn __wavedash_alloc(len: i32) -> i32 {
 
 #[no_mangle]
 extern "C" fn __wavedash_run_system(id: i32) {
-    let mut app = unsafe { App::current() };
+    let mut app = unsafe { App::current_inner() };
     RUNTIME
         .try_with(|rt| rt.borrow_mut().systems.get_mut(&id).unwrap()(&mut app.world))
         .unwrap();
@@ -68,12 +70,16 @@ pub fn log(s: impl fmt::Display) {
 struct Runtime {
     systems: HashMap<i32, Box<dyn FnMut(&mut World)>>,
     next_id: i32,
+    app: Option<App>,
 }
 
 thread_local! {
     static RUNTIME: RefCell<Runtime> = RefCell::new(Runtime {
         systems: HashMap::new(),
         next_id: 0,
+        app: Some(App {
+            world: World { _priv: () },
+        })
     });
 }
 
@@ -82,7 +88,13 @@ pub struct App {
 }
 
 impl App {
-    pub unsafe fn current() -> Self {
+    pub fn current() -> Self {
+        RUNTIME
+            .try_with(|rt| rt.borrow_mut().app.take().unwrap())
+            .unwrap()
+    }
+
+    unsafe fn current_inner() -> Self {
         App {
             world: World { _priv: () },
         }
