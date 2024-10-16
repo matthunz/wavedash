@@ -5,3 +5,15 @@ version = 3
 [[package]]
 name = "wavedash"
 version = "0.1.0"
+
+[[package]]
+name = "wavedash-core"
+version = "0.1.0"
+
+[[package]]
+name = "wavedash-example"
+version = "0.1.0"
+
+[[package]]
+name = "wavedash-host"
+version = "0.1.0"
