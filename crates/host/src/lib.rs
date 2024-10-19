@@ -12,17 +12,17 @@ use wasmer::{
 };
 use wavedash_core::{Request, Response};
 
+#[derive(Clone)]
+struct ResourceFactory {
+    serialize_fn: Arc<dyn Fn(Ptr) -> serde_json::Value + Send + Sync>,
+    deserialize_fn: Arc<dyn Fn(PtrMut, serde_json::Value) + Send + Sync>,
+}
+
 pub struct WasmModule {
     store: Store,
     main_fn: Function,
     env: FunctionEnv<Env>,
-    resources: HashMap<
-        TypeId,
-        (
-            Arc<dyn Fn(Ptr) -> serde_json::Value + Send + Sync>,
-            Arc<dyn Fn(PtrMut, serde_json::Value) + Send + Sync>,
-        ),
-    >,
+    resources: HashMap<TypeId, ResourceFactory>,
 }
 
 impl WasmModule {
@@ -87,16 +87,16 @@ impl WasmModule {
     {
         self.resources.insert(
             TypeId::of::<R>(),
-            (
-                Arc::new(|ptr| {
+            ResourceFactory {
+                serialize_fn: Arc::new(|ptr| {
                     let r: &R = unsafe { ptr.deref() };
                     serde_json::to_value(r).unwrap()
                 }),
-                Arc::new(|ptr, value| {
+                deserialize_fn: Arc::new(|ptr, value| {
                     let r: &mut R = unsafe { ptr.deref_mut() };
                     *r = serde_json::from_value(value).unwrap();
                 }),
-            ),
+            },
         );
         self
     }
@@ -126,13 +126,7 @@ pub struct Env {
     memory: Option<Memory>,
     func: Option<Function>,
     world: *mut World,
-    resources: HashMap<
-        TypeId,
-        (
-            Arc<dyn Fn(Ptr) -> serde_json::Value + Send + Sync>,
-            Arc<dyn Fn(PtrMut, serde_json::Value) + Send + Sync>,
-        ),
-    >,
+    resources: HashMap<TypeId, ResourceFactory>,
 }
 
 unsafe impl Send for Env {}
@@ -167,7 +161,11 @@ fn request(mut ctx: FunctionEnvMut<Env>, input_ptr: u32, input_len: u32) -> u32 
                 .unwrap();
             let ptr = world.get_resource_by_id(component_id).unwrap();
 
-            let json = data.resources.get(&type_registration.type_id()).unwrap().0(ptr);
+            let json = (data
+                .resources
+                .get(&type_registration.type_id())
+                .unwrap()
+                .serialize_fn)(ptr);
 
             Response::Resource(json)
         }
@@ -185,7 +183,7 @@ fn request(mut ctx: FunctionEnvMut<Env>, input_ptr: u32, input_len: u32) -> u32 
 
             let mut ptr = world.get_resource_mut_by_id(component_id).unwrap();
 
-            data.resources.get(&type_id).unwrap().1(
+            (data.resources.get(&type_id).unwrap().deserialize_fn)(
                 ptr.as_mut(),
                 serde_json::from_value(value).unwrap(),
             );
