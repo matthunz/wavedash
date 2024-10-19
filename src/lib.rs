@@ -12,7 +12,7 @@ use wavedash_core::{Request, Response};
 pub use wavedash_macros::main;
 
 pub mod prelude {
-    pub use crate::{App, Res, ResMut, Update};
+    pub use crate::{Res, ResMut, Update, World};
 }
 
 #[link(wasm_import_module = "__wavedash__")]
@@ -41,9 +41,9 @@ extern "C" fn __wavedash_alloc(len: i32) -> i32 {
 
 #[no_mangle]
 extern "C" fn __wavedash_run_system(id: i32) {
-    let mut app = unsafe { App::current_inner() };
+    let mut world = unsafe { World::current_inner() };
     RUNTIME
-        .try_with(|rt| rt.borrow_mut().systems.get_mut(&id).unwrap()(&mut app.world))
+        .try_with(|rt| rt.borrow_mut().systems.get_mut(&id).unwrap()(&mut world))
         .unwrap();
 }
 
@@ -75,62 +75,12 @@ type SystemFn = Box<dyn FnMut(&mut World)>;
 
 struct Runtime {
     systems: HashMap<i32, SystemFn>,
-    next_id: i32,
-    app: Option<App>,
 }
 
 thread_local! {
     static RUNTIME: RefCell<Runtime> = RefCell::new(Runtime {
         systems: HashMap::new(),
-        next_id: 0,
-        app: Some(App {
-            world: World { _priv: () },
-        })
     });
-}
-
-pub struct App {
-    world: World,
-}
-
-impl App {
-    pub fn current() -> Self {
-        RUNTIME
-            .try_with(|rt| rt.borrow_mut().app.take().unwrap())
-            .unwrap()
-    }
-
-    unsafe fn current_inner() -> Self {
-        App {
-            world: World { _priv: () },
-        }
-    }
-
-    pub fn world_mut(&mut self) -> &mut World {
-        &mut self.world
-    }
-
-    pub fn add_system<Marker, F>(&mut self, _label: impl TypePath, mut system: F)
-    where
-        F: WasmSystemParamFunction<Marker> + 'static,
-    {
-        RUNTIME
-            .try_with(|rt| {
-                let mut rt = rt.borrow_mut();
-
-                let id = rt.next_id;
-                rt.next_id += 1;
-
-                rt.systems.insert(
-                    id,
-                    Box::new(move |world| {
-                        let param = unsafe { F::Params::from_wasm_world(world) };
-                        system.run(param);
-                    }),
-                );
-            })
-            .unwrap();
-    }
 }
 
 #[derive(TypePath)]
@@ -141,6 +91,14 @@ pub struct World {
 }
 
 impl World {
+    pub unsafe fn current() -> Self {
+        Self { _priv: () }
+    }
+
+    unsafe fn current_inner() -> Self {
+        Self { _priv: () }
+    }
+
     pub fn resource<R>(&self) -> R
     where
         R: Resource + TypePath + DeserializeOwned,

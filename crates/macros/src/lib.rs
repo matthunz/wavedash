@@ -8,10 +8,25 @@ pub fn main(input: TokenStream, attrs: TokenStream) -> TokenStream {
 
     quote! {
         #[no_mangle]
-        extern "C" fn run() {
-            #input
+        extern "C" fn __wavedash_main() {
             #attrs
-            main()
+            #input
+
+
+            fn __wavedash_runner<Marker, F>(mut system: F)
+            where
+                F: wavedash::WasmSystemParamFunction<Marker> + 'static,
+            {
+                let mut __wavedash_world = unsafe { wavedash::World::current() };
+                let param = unsafe {
+                    use wavedash::WasmSystemParam;
+                    F::Params::from_wasm_world(&mut __wavedash_world)
+                };
+                system.run(param);
+            }
+
+            __wavedash_runner(main)
+            
         }
     }
     .into()

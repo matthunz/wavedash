@@ -1,4 +1,5 @@
 use bevy::{
+    ecs::component::{ComponentHooks, StorageType},
     prelude::*,
     ptr::{Ptr, PtrMut},
     utils::HashMap,
@@ -11,9 +12,10 @@ use wasmer::{
 };
 use wavedash_core::{Request, Response};
 
-#[derive(Default)]
-pub struct WavedashPlugin {
-    module: Vec<u8>,
+pub struct WasmModule {
+    store: Store,
+    main_fn: Function,
+    env: FunctionEnv<Env>,
     resources: HashMap<
         TypeId,
         (
@@ -23,49 +25,21 @@ pub struct WavedashPlugin {
     >,
 }
 
-impl WavedashPlugin {
+impl WasmModule {
     pub fn new(module: Vec<u8>) -> Self {
-        Self {
-            module,
-            resources: HashMap::new(),
-        }
-    }
-
-    pub fn with_resource<R>(mut self) -> Self
-    where
-        R: Resource + DeserializeOwned + Serialize,
-    {
-        self.resources.insert(
-            TypeId::of::<R>(),
-            (
-                Arc::new(|ptr| {
-                    let r: &R = unsafe { ptr.deref() };
-                    serde_json::to_value(r).unwrap()
-                }),
-                Arc::new(|ptr, value| {
-                    let r: &mut R = unsafe { ptr.deref_mut() };
-                    *r = serde_json::from_value(value).unwrap();
-                }),
-            ),
-        );
-        self
-    }
-}
-
-impl Plugin for WavedashPlugin {
-    fn build(&self, app: &mut App) {
         let mut store = Store::default();
-        let module = Module::new(&store, &self.module).unwrap();
+        let module = Module::new(&store, &module).unwrap();
 
         let env = FunctionEnv::new(
             &mut store,
             Env {
                 memory: None,
                 func: None,
-                world: app.world_mut() as _,
-                resources: self.resources.clone(),
+                world: std::ptr::null_mut(),
+                resources: HashMap::new(),
             },
         );
+
         let memory = Memory::new(&mut store, MemoryType::new(1, None, false)).unwrap();
         let import_object = imports! {
             "__wbindgen_placeholder__" => {
@@ -93,36 +67,59 @@ impl Plugin for WavedashPlugin {
                 .clone(),
         );
 
-        let run_fn = instance.exports.get_function("run").unwrap();
-        run_fn.call(&mut store, &[]).unwrap();
-
-        let run_fn = instance
+        let main_fn = instance
             .exports
-            .get_function("__wavedash_run_system")
+            .get_function("__wavedash_main")
             .unwrap()
             .clone();
 
-        app.insert_resource(WasmRegistry { store, run_fn, env })
-            .add_systems(Update, run);
+        Self {
+            store,
+            main_fn,
+            env,
+            resources: HashMap::new(),
+        }
+    }
+
+    pub fn with_resource<R>(mut self) -> Self
+    where
+        R: Resource + DeserializeOwned + Serialize,
+    {
+        self.resources.insert(
+            TypeId::of::<R>(),
+            (
+                Arc::new(|ptr| {
+                    let r: &R = unsafe { ptr.deref() };
+                    serde_json::to_value(r).unwrap()
+                }),
+                Arc::new(|ptr, value| {
+                    let r: &mut R = unsafe { ptr.deref_mut() };
+                    *r = serde_json::from_value(value).unwrap();
+                }),
+            ),
+        );
+        self
     }
 }
 
-#[derive(Resource)]
-struct WasmRegistry {
-    store: Store,
-    run_fn: Function,
-    env: FunctionEnv<Env>,
-}
+impl Component for WasmModule {
+    const STORAGE_TYPE: StorageType = StorageType::SparseSet;
 
-fn run(world: &mut World) {
-    let world_ptr = world as *mut _;
-    let registry = &mut *world.get_resource_mut::<WasmRegistry>().unwrap();
-    registry.env.as_mut(&mut registry.store).world = world_ptr;
-    registry
-        .run_fn
-        .clone()
-        .call(&mut registry.store, &[Value::I32(0)])
-        .unwrap();
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks.on_insert(|mut world, entity, _| {
+            world.commands().add(move |world: &mut World| {
+                let world_ptr = world as *mut _;
+
+                let wasm = &mut *world.get_mut::<WasmModule>(entity).unwrap();
+
+                let env = wasm.env.as_mut(&mut wasm.store);
+                env.world = world_ptr;
+                env.resources = wasm.resources.clone();
+
+                wasm.main_fn.clone().call(&mut wasm.store, &[]).unwrap();
+            });
+        });
+    }
 }
 
 pub struct Env {
