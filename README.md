@@ -24,19 +24,24 @@ Then setup the `WavedashPlugin` in your game's Bevy App using your shared state.
 ```rs
 use bevy::prelude::*;
 use wavedash_example_core::ExampleResource;
-use wavedash_host::WavedashPlugin;
+use wavedash_host::WasmModule;
 
 fn main() {
-    let module = include_bytes!("../../target/wasm32-unknown-unknown/debug/wavedash_example_client.wasm");
-
     App::new()
-        .add_plugins((
-            DefaultPlugins,
-            WavedashPlugin::new(module.to_vec()).with_resource::<ExampleResource>(),
-        ))
+        .add_plugins(DefaultPlugins)
         .register_type::<ExampleResource>()
         .insert_resource(ExampleResource { value: 42 })
+        .add_systems(Startup, setup)
         .run();
+}
+
+fn setup(mut commands: Commands) {
+    let module =
+        include_bytes!("../../target/wasm32-unknown-unknown/debug/wavedash_example_client.wasm");
+
+    let wasm = WasmModule::new(module.to_vec()).with_resource::<ExampleResource>();
+
+    commands.spawn(wasm);
 }
 ```
 
@@ -49,13 +54,7 @@ use wavedash::prelude::*;
 use wavedash_example_core::ExampleResource;
 
 #[wavedash::main]
-fn main() {
-    App::current().add_system(Update, on_update);
-}
-
-fn on_update(mut example: ResMut<ExampleResource>) {
-    example.value += 1;
-
+fn main(example: ResMut<ExampleResource>) {
     wavedash::dbg(&*example);
 }
 ```
