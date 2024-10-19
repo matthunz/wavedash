@@ -1,6 +1,6 @@
 # Wavedash
 
-A WASM runtime for Bevy mods and scripting.
+A (WIP) WASM runtime for Bevy mods and scripting.
 
 ## Shared
 
@@ -45,7 +45,7 @@ fn main() {
 Finally create a mod using the same shared crate from before.
 
 ```rs
-use wavedash::{App, ResMut, Update};
+use wavedash::prelude::*;
 use wavedash_example_core::ExampleResource;
 
 #[wavedash::main]
@@ -55,6 +55,7 @@ fn main() {
 
 fn on_update(mut example: ResMut<ExampleResource>) {
     example.value += 1;
+
     wavedash::dbg(&*example);
 }
 ```

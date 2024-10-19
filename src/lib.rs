@@ -11,6 +11,10 @@ use wavedash_core::{Request, Response};
 
 pub use wavedash_macros::main;
 
+pub mod prelude {
+    pub use crate::{App, Res, ResMut, Update};
+}
+
 #[link(wasm_import_module = "__wavedash__")]
 extern "C" {
     fn __wavedash_log(ptr: i32, len: i32) -> i32;
@@ -104,7 +108,7 @@ impl App {
         &mut self.world
     }
 
-    pub fn add_system<Marker, F>(&mut self, label: impl TypePath, mut system: F)
+    pub fn add_system<Marker, F>(&mut self, _label: impl TypePath, mut system: F)
     where
         F: WasmSystemParamFunction<Marker> + 'static,
     {

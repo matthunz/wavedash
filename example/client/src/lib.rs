@@ -1,4 +1,4 @@
-use wavedash::{App, ResMut, Update};
+use wavedash::prelude::*;
 use wavedash_example_core::ExampleResource;
 
 #[wavedash::main]
@@ -8,5 +8,6 @@ fn main() {
 
 fn on_update(mut example: ResMut<ExampleResource>) {
     example.value += 1;
+
     wavedash::dbg(&*example);
 }
