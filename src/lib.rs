@@ -71,8 +71,10 @@ pub fn log(s: impl fmt::Display) {
     request(&Request::Log(s.to_string()));
 }
 
+type SystemFn = Box<dyn FnMut(&mut World)>;
+
 struct Runtime {
-    systems: HashMap<i32, Box<dyn FnMut(&mut World)>>,
+    systems: HashMap<i32, SystemFn>,
     next_id: i32,
     app: Option<App>,
 }
@@ -203,6 +205,8 @@ impl<R: Serialize> Drop for ResourceMut<'_, R> {
 pub trait WasmSystemParam {
     type Item<'w>;
 
+    /// # Safety
+    /// TODO
     unsafe fn from_wasm_world(world: &mut World) -> Self::Item<'_>;
 }
 
