@@ -1,4 +1,4 @@
-use bevy_ecs::system::Resource;
+use bevy_ecs::resource::Resource;
 use bevy_reflect::TypePath;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -111,7 +111,7 @@ impl World {
         }
     }
 
-    pub fn resource_mut<R>(&mut self) -> ResourceMut<R>
+    pub fn resource_mut<'a, R>(&'a mut self) -> ResourceMut<'a, R>
     where
         R: Resource + DeserializeOwned + Serialize + TypePath,
     {

@@ -1,16 +1,21 @@
 use bevy::{
-    ecs::component::{ComponentHooks, StorageType},
+    ecs::{
+        component::{Mutable, StorageType},
+        lifecycle::ComponentHook,
+    },
+    platform::collections::HashMap,
     prelude::*,
     ptr::{Ptr, PtrMut},
-    utils::HashMap,
 };
 use serde::{de::DeserializeOwned, Serialize};
-use std::{any::TypeId, ffi::CString, sync::Arc};
-use wasmer::{
-    imports, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, MemoryType, MemoryView,
-    Module, Store, Value, WasmPtr,
-};
+use std::{any::TypeId, cell::RefCell, sync::Arc};
+use wasmtime::{Engine, Instance, Linker, Memory, Module, Store, TypedFunc};
 use wavedash_core::{Request, Response};
+
+thread_local! {
+    static WORLD_PTR: RefCell<*mut World> = RefCell::new(std::ptr::null_mut());
+    static RESOURCES: RefCell<HashMap<TypeId, ResourceFactory>> = RefCell::new(HashMap::new());
+}
 
 #[derive(Clone)]
 struct ResourceFactory {
@@ -19,64 +24,47 @@ struct ResourceFactory {
 }
 
 pub struct WasmModule {
-    store: Store,
-    main_fn: Function,
-    env: FunctionEnv<Env>,
+    store: Store<()>,
+    main_fn: TypedFunc<(), ()>,
+    #[allow(dead_code)]
+    instance: Instance,
+    #[allow(dead_code)]
+    memory: Memory,
     resources: HashMap<TypeId, ResourceFactory>,
 }
 
 impl WasmModule {
     pub fn new(module: Vec<u8>) -> Self {
-        let mut store = Store::default();
-        let module = Module::new(&store, &module).unwrap();
+        let engine = Engine::default();
+        let module = Module::new(&engine, &module).unwrap();
 
-        let env = FunctionEnv::new(
-            &mut store,
-            Env {
-                memory: None,
-                func: None,
-                world: std::ptr::null_mut(),
-                resources: HashMap::new(),
-            },
-        );
+        let mut store = Store::new(&engine, ());
+        let mut linker = Linker::new(&engine);
 
-        let memory = Memory::new(&mut store, MemoryType::new(1, None, false)).unwrap();
-        let import_object = imports! {
-            "__wbindgen_placeholder__" => {
-                "__wbindgen_describe" => Function::new_typed(&mut store, |_: u32| {}),
-                "__wbindgen_throw" => Function::new_typed(&mut store, |_: i32, _: i32| {}),
-                "memory" => memory,
-            },
-            "__wbindgen_externref_xform__" => {
-                "__wbindgen_externref_table_grow" => Function::new_typed(&mut store, |_delta: i32| 0i32),
-                "__wbindgen_externref_table_set_null" => Function::new_typed(&mut store, |_idx: i32| {}),
-            },
-            "__wavedash__" => {
-                "__wavedash_request" => Function::new_typed_with_env(&mut store, &env, request),
-            }
-        };
-        let instance = Instance::new(&mut store, &module, &import_object).unwrap();
+        let memory = Memory::new(&mut store, wasmtime::MemoryType::new(1, None)).unwrap();
+        linker.define(&mut store, "env", "memory", memory).unwrap();
 
-        let memory = instance.exports.get_memory("memory").unwrap();
-        env.as_mut(&mut store).memory = Some(memory.clone());
-        env.as_mut(&mut store).func = Some(
-            instance
-                .exports
-                .get_function("__wavedash_alloc")
-                .unwrap()
-                .clone(),
-        );
+        linker
+            .func_wrap(
+                "__wavedash__",
+                "__wavedash_request",
+                |mut caller: wasmtime::Caller<'_, ()>, input_ptr: i32, input_len: i32| {
+                    request(&mut caller, input_ptr, input_len).unwrap()
+                },
+            )
+            .unwrap();
+
+        let instance = linker.instantiate(&mut store, &module).unwrap();
 
         let main_fn = instance
-            .exports
-            .get_function("__wavedash_main")
-            .unwrap()
-            .clone();
+            .get_typed_func::<(), ()>(&mut store, "__wavedash_main")
+            .unwrap();
 
         Self {
             store,
             main_fn,
-            env,
+            instance,
+            memory,
             resources: HashMap::new(),
         }
     }
@@ -105,44 +93,61 @@ impl WasmModule {
 impl Component for WasmModule {
     const STORAGE_TYPE: StorageType = StorageType::SparseSet;
 
-    fn register_component_hooks(hooks: &mut ComponentHooks) {
-        hooks.on_insert(|mut world, entity, _| {
-            world.commands().add(move |world: &mut World| {
-                let world_ptr = world as *mut _;
+    type Mutability = Mutable;
 
-                let wasm = &mut *world.get_mut::<WasmModule>(entity).unwrap();
+    fn on_insert() -> Option<ComponentHook> {
+        Some(|mut world, cx| {
+            let world_ref = unsafe { world.as_unsafe_world_cell().world_mut() };
+            let world_ptr = world_ref as *mut _;
 
-                let env = wasm.env.as_mut(&mut wasm.store);
-                env.world = world_ptr;
-                env.resources = wasm.resources.clone();
+            let wasm = &mut *world.get_mut::<WasmModule>(cx.entity).unwrap();
 
-                wasm.main_fn.clone().call(&mut wasm.store, &[]).unwrap();
+            WORLD_PTR.with(|w| {
+                *w.borrow_mut() = world_ptr;
             });
-        });
+            RESOURCES.with(|r| {
+                *r.borrow_mut() = wasm.resources.clone();
+            });
+
+            wasm.main_fn.call(&mut wasm.store, ()).unwrap();
+        })
     }
 }
 
-pub struct Env {
-    memory: Option<Memory>,
-    func: Option<Function>,
-    world: *mut World,
-    resources: HashMap<TypeId, ResourceFactory>,
+pub fn read_string(
+    memory: &Memory,
+    store: &Store<()>,
+    start: u32,
+    len: u32,
+) -> anyhow::Result<String> {
+    let data = memory.data(store);
+    let slice = &data[start as usize..][..len as usize];
+    Ok(String::from_utf8(slice.to_vec())?)
 }
 
-unsafe impl Send for Env {}
+fn request(
+    caller: &mut wasmtime::Caller<'_, ()>,
+    input_ptr: i32,
+    input_len: i32,
+) -> anyhow::Result<i32> {
+    let memory = caller
+        .get_export("memory")
+        .and_then(|e| e.into_memory())
+        .ok_or_else(|| anyhow::anyhow!("memory not found"))?;
 
-unsafe impl Sync for Env {}
+    let view = unsafe {
+        std::slice::from_raw_parts(
+            memory.data_ptr(&*caller).add(input_ptr as usize),
+            input_len as usize,
+        )
+    };
 
-pub fn read_string(view: &MemoryView, start: u32, len: u32) -> anyhow::Result<String> {
-    Ok(WasmPtr::<u8>::new(start).read_utf8_string(view, len)?)
-}
+    let input = String::from_utf8(view.to_vec())?;
+    let req: Request = serde_json::from_str(&input)?;
 
-fn request(mut ctx: FunctionEnvMut<Env>, input_ptr: u32, input_len: u32) -> u32 {
-    let (data, mut store) = ctx.data_and_store_mut();
-
-    let view = data.memory.as_ref().unwrap().view(&store);
-    let input = read_string(&view, input_ptr, input_len).unwrap();
-    let req: Request = serde_json::from_str(&input).unwrap();
+    let world_ptr = WORLD_PTR.with(|w| *w.borrow());
+    let resources = RESOURCES.with(|r| r.borrow().clone());
+    let world = unsafe { &mut *world_ptr };
 
     let res = match req {
         Request::Log(s) => {
@@ -150,62 +155,78 @@ fn request(mut ctx: FunctionEnvMut<Env>, input_ptr: u32, input_len: u32) -> u32 
             Response::Empty
         }
         Request::GetResource { type_path } => {
-            let world = unsafe { &mut *data.world };
-            let registry = world.get_resource::<AppTypeRegistry>().unwrap();
+            let registry = world
+                .get_resource::<AppTypeRegistry>()
+                .ok_or_else(|| anyhow::anyhow!("AppTypeRegistry not found"))?;
             let registry_ref = registry.read();
-            let type_registration = registry_ref.get_with_type_path(&type_path).unwrap();
+            let type_registration = registry_ref
+                .get_with_type_path(&type_path)
+                .ok_or_else(|| anyhow::anyhow!("type not found: {}", type_path))?;
 
             let component_id = world
                 .components()
                 .get_resource_id(type_registration.type_id())
-                .unwrap();
-            let ptr = world.get_resource_by_id(component_id).unwrap();
+                .ok_or_else(|| anyhow::anyhow!("component_id not found"))?;
+            let ptr = world
+                .get_resource_by_id(component_id)
+                .ok_or_else(|| anyhow::anyhow!("resource not found"))?;
 
-            let json = (data
-                .resources
+            let json = (resources
                 .get(&type_registration.type_id())
-                .unwrap()
+                .ok_or_else(|| anyhow::anyhow!("resource factory not found"))?
                 .serialize_fn)(ptr);
 
             Response::Resource(json)
         }
         Request::SetResource { type_path, value } => {
-            let world = unsafe { &mut *data.world };
-            let registry = world.get_resource::<AppTypeRegistry>().unwrap();
+            let registry = world
+                .get_resource::<AppTypeRegistry>()
+                .ok_or_else(|| anyhow::anyhow!("AppTypeRegistry not found"))?;
             let registry_ref = registry.read();
-            let type_registration = registry_ref.get_with_type_path(&type_path).unwrap();
+            let type_registration = registry_ref
+                .get_with_type_path(&type_path)
+                .ok_or_else(|| anyhow::anyhow!("type not found: {}", type_path))?;
             let type_id = type_registration.type_id();
             let component_id = world
                 .components()
                 .get_resource_id(type_registration.type_id())
-                .unwrap();
+                .ok_or_else(|| anyhow::anyhow!("component_id not found"))?;
             drop(registry_ref);
 
-            let mut ptr = world.get_resource_mut_by_id(component_id).unwrap();
+            let mut ptr = world
+                .get_resource_mut_by_id(component_id)
+                .ok_or_else(|| anyhow::anyhow!("resource not found"))?;
 
-            (data.resources.get(&type_id).unwrap().deserialize_fn)(
-                ptr.as_mut(),
-                serde_json::from_value(value).unwrap(),
-            );
+            (resources
+                .get(&type_id)
+                .ok_or_else(|| anyhow::anyhow!("resource factory not found"))?
+                .deserialize_fn)(ptr.as_mut(), serde_json::from_value(value)?);
 
             Response::Empty
         }
     };
 
-    let json = serde_json::to_string(&res).unwrap();
-    let buf = CString::new(json).unwrap().into_bytes_with_nul();
+    let json = serde_json::to_string(&res)?;
+    let mut buf = json.into_bytes();
+    buf.push(0); // Add null terminator for C string
 
-    let values = data
-        .func
-        .as_ref()
-        .unwrap()
-        .call(&mut store, &[Value::I32(buf.len() as i32)])
-        .unwrap();
+    // Get the alloc function and call it to allocate space
+    let alloc_fn = caller
+        .get_export("__wavedash_alloc")
+        .and_then(|e| e.into_func())
+        .ok_or_else(|| anyhow::anyhow!("__wavedash_alloc not found"))?;
 
-    let view = data.memory.as_ref().unwrap().view(&store);
+    let alloc_typed: TypedFunc<i32, i32> = alloc_fn.typed(&*caller)?;
+    let ptr = alloc_typed.call(&mut *caller, buf.len() as i32)?;
 
-    let ptr = values[0].i32().unwrap();
-    view.write(ptr as _, &buf).unwrap();
+    // Write the response to the allocated memory
+    let memory = caller
+        .get_export("memory")
+        .and_then(|e| e.into_memory())
+        .ok_or_else(|| anyhow::anyhow!("memory not found"))?;
 
-    ptr as u32
+    let data_mut = memory.data_mut(&mut *caller);
+    data_mut[ptr as usize..ptr as usize + buf.len()].copy_from_slice(&buf);
+
+    Ok(ptr)
 }

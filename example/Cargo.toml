@@ -5,5 +5,5 @@ edition = "2021"
 
 [dependencies]
 wavedash-example-core = { path = "core" }
-bevy = "0.14.2"
+bevy = "0.17.3"
 wavedash-host = { path = "../crates/host" }

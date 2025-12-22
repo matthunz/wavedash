@@ -26,7 +26,7 @@ pub fn main(input: TokenStream, attrs: TokenStream) -> TokenStream {
             }
 
             __wavedash_runner(main)
-            
+
         }
     }
     .into()
