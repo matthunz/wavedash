@@ -5550,16 +5550,7 @@ dependencies = [
  "bevy_reflect",
  "serde",
  "serde_json",
- "wavedash-core",
  "wavedash-macros",
-]
-
-[[package]]
-name = "wavedash-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -5598,7 +5589,6 @@ dependencies = [
  "serde",
  "serde_json",
  "wasmtime",
- "wavedash-core",
 ]
 
 [[package]]

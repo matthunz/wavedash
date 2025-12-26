@@ -10,7 +10,6 @@ use bevy::{
 use serde::{de::DeserializeOwned, Serialize};
 use std::{any::TypeId, cell::RefCell, sync::Arc};
 use wasmtime::{Engine, Instance, Linker, Memory, Module, Store, TypedFunc};
-use wavedash_core::{Request, Response};
 
 thread_local! {
     static WORLD_PTR: RefCell<*mut World> = RefCell::new(std::ptr::null_mut());
@@ -47,9 +46,43 @@ impl WasmModule {
         linker
             .func_wrap(
                 "__wavedash__",
-                "__wavedash_request",
-                |mut caller: wasmtime::Caller<'_, ()>, input_ptr: i32, input_len: i32| {
-                    request(&mut caller, input_ptr, input_len).unwrap()
+                "__wavedash_log",
+                |mut caller: wasmtime::Caller<'_, ()>, msg_ptr: i32, msg_len: i32| -> i32 {
+                    log_handler(&mut caller, msg_ptr, msg_len).unwrap();
+                    0
+                },
+            )
+            .unwrap();
+
+        linker
+            .func_wrap(
+                "__wavedash__",
+                "__wavedash_get_resource",
+                |mut caller: wasmtime::Caller<'_, ()>, type_path_ptr: i32, type_path_len: i32| {
+                    get_resource_handler(&mut caller, type_path_ptr, type_path_len).unwrap()
+                },
+            )
+            .unwrap();
+
+        linker
+            .func_wrap(
+                "__wavedash__",
+                "__wavedash_set_resource",
+                |mut caller: wasmtime::Caller<'_, ()>,
+                 type_path_ptr: i32,
+                 type_path_len: i32,
+                 value_ptr: i32,
+                 value_len: i32|
+                 -> i32 {
+                    set_resource_handler(
+                        &mut caller,
+                        type_path_ptr,
+                        type_path_len,
+                        value_ptr,
+                        value_len,
+                    )
+                    .unwrap();
+                    0
                 },
             )
             .unwrap();
@@ -125,10 +158,32 @@ pub fn read_string(
     Ok(String::from_utf8(slice.to_vec())?)
 }
 
-fn request(
+fn log_handler(
     caller: &mut wasmtime::Caller<'_, ()>,
-    input_ptr: i32,
-    input_len: i32,
+    msg_ptr: i32,
+    msg_len: i32,
+) -> anyhow::Result<()> {
+    let memory = caller
+        .get_export("memory")
+        .and_then(|e| e.into_memory())
+        .ok_or_else(|| anyhow::anyhow!("memory not found"))?;
+
+    let view = unsafe {
+        std::slice::from_raw_parts(
+            memory.data_ptr(&*caller).add(msg_ptr as usize),
+            msg_len as usize,
+        )
+    };
+    let msg = String::from_utf8(view.to_vec())?;
+    println!("{}", msg);
+
+    Ok(())
+}
+
+fn get_resource_handler(
+    caller: &mut wasmtime::Caller<'_, ()>,
+    type_path_ptr: i32,
+    type_path_len: i32,
 ) -> anyhow::Result<i32> {
     let memory = caller
         .get_export("memory")
@@ -137,78 +192,40 @@ fn request(
 
     let view = unsafe {
         std::slice::from_raw_parts(
-            memory.data_ptr(&*caller).add(input_ptr as usize),
-            input_len as usize,
+            memory.data_ptr(&*caller).add(type_path_ptr as usize),
+            type_path_len as usize,
         )
     };
-
-    let input = String::from_utf8(view.to_vec())?;
-    let req: Request = serde_json::from_str(&input)?;
+    let type_path = String::from_utf8(view.to_vec())?;
 
     let world_ptr = WORLD_PTR.with(|w| *w.borrow());
     let resources = RESOURCES.with(|r| r.borrow().clone());
     let world = unsafe { &mut *world_ptr };
 
-    let res = match req {
-        Request::Log(s) => {
-            println!("{}", s);
-            Response::Empty
-        }
-        Request::GetResource { type_path } => {
-            let registry = world
-                .get_resource::<AppTypeRegistry>()
-                .ok_or_else(|| anyhow::anyhow!("AppTypeRegistry not found"))?;
-            let registry_ref = registry.read();
-            let type_registration = registry_ref
-                .get_with_type_path(&type_path)
-                .ok_or_else(|| anyhow::anyhow!("type not found: {}", type_path))?;
+    let registry = world
+        .get_resource::<AppTypeRegistry>()
+        .ok_or_else(|| anyhow::anyhow!("AppTypeRegistry not found"))?;
+    let registry_ref = registry.read();
+    let type_registration = registry_ref
+        .get_with_type_path(&type_path)
+        .ok_or_else(|| anyhow::anyhow!("type not found: {}", type_path))?;
 
-            let component_id = world
-                .components()
-                .get_resource_id(type_registration.type_id())
-                .ok_or_else(|| anyhow::anyhow!("component_id not found"))?;
-            let ptr = world
-                .get_resource_by_id(component_id)
-                .ok_or_else(|| anyhow::anyhow!("resource not found"))?;
+    let component_id = world
+        .components()
+        .get_resource_id(type_registration.type_id())
+        .ok_or_else(|| anyhow::anyhow!("component_id not found"))?;
+    let ptr = world
+        .get_resource_by_id(component_id)
+        .ok_or_else(|| anyhow::anyhow!("resource not found"))?;
 
-            let json = (resources
-                .get(&type_registration.type_id())
-                .ok_or_else(|| anyhow::anyhow!("resource factory not found"))?
-                .serialize_fn)(ptr);
+    let json = (resources
+        .get(&type_registration.type_id())
+        .ok_or_else(|| anyhow::anyhow!("resource factory not found"))?
+        .serialize_fn)(ptr);
 
-            Response::Resource(json)
-        }
-        Request::SetResource { type_path, value } => {
-            let registry = world
-                .get_resource::<AppTypeRegistry>()
-                .ok_or_else(|| anyhow::anyhow!("AppTypeRegistry not found"))?;
-            let registry_ref = registry.read();
-            let type_registration = registry_ref
-                .get_with_type_path(&type_path)
-                .ok_or_else(|| anyhow::anyhow!("type not found: {}", type_path))?;
-            let type_id = type_registration.type_id();
-            let component_id = world
-                .components()
-                .get_resource_id(type_registration.type_id())
-                .ok_or_else(|| anyhow::anyhow!("component_id not found"))?;
-            drop(registry_ref);
-
-            let mut ptr = world
-                .get_resource_mut_by_id(component_id)
-                .ok_or_else(|| anyhow::anyhow!("resource not found"))?;
-
-            (resources
-                .get(&type_id)
-                .ok_or_else(|| anyhow::anyhow!("resource factory not found"))?
-                .deserialize_fn)(ptr.as_mut(), serde_json::from_value(value)?);
-
-            Response::Empty
-        }
-    };
-
-    let json = serde_json::to_string(&res)?;
-    let mut buf = json.into_bytes();
-    buf.push(0); // Add null terminator for C string
+    let json_str = serde_json::to_string(&json)?;
+    let mut buf = json_str.into_bytes();
+    buf.push(0); // Add null terminator
 
     // Get the alloc function and call it to allocate space
     let alloc_fn = caller
@@ -229,4 +246,64 @@ fn request(
     data_mut[ptr as usize..ptr as usize + buf.len()].copy_from_slice(&buf);
 
     Ok(ptr)
+}
+
+fn set_resource_handler(
+    caller: &mut wasmtime::Caller<'_, ()>,
+    type_path_ptr: i32,
+    type_path_len: i32,
+    value_ptr: i32,
+    value_len: i32,
+) -> anyhow::Result<()> {
+    let memory = caller
+        .get_export("memory")
+        .and_then(|e| e.into_memory())
+        .ok_or_else(|| anyhow::anyhow!("memory not found"))?;
+
+    let view = unsafe {
+        std::slice::from_raw_parts(
+            memory.data_ptr(&*caller).add(type_path_ptr as usize),
+            type_path_len as usize,
+        )
+    };
+    let type_path = String::from_utf8(view.to_vec())?;
+
+    let view = unsafe {
+        std::slice::from_raw_parts(
+            memory.data_ptr(&*caller).add(value_ptr as usize),
+            value_len as usize,
+        )
+    };
+    let value_data = String::from_utf8(view.to_vec())?;
+
+    let value: serde_json::Value = serde_json::from_str(&value_data)?;
+
+    let world_ptr = WORLD_PTR.with(|w| *w.borrow());
+    let resources = RESOURCES.with(|r| r.borrow().clone());
+    let world = unsafe { &mut *world_ptr };
+
+    let registry = world
+        .get_resource::<AppTypeRegistry>()
+        .ok_or_else(|| anyhow::anyhow!("AppTypeRegistry not found"))?;
+    let registry_ref = registry.read();
+    let type_registration = registry_ref
+        .get_with_type_path(&type_path)
+        .ok_or_else(|| anyhow::anyhow!("type not found: {}", type_path))?;
+    let type_id = type_registration.type_id();
+    let component_id = world
+        .components()
+        .get_resource_id(type_registration.type_id())
+        .ok_or_else(|| anyhow::anyhow!("component_id not found"))?;
+    drop(registry_ref);
+
+    let mut ptr = world
+        .get_resource_mut_by_id(component_id)
+        .ok_or_else(|| anyhow::anyhow!("resource not found"))?;
+
+    (resources
+        .get(&type_id)
+        .ok_or_else(|| anyhow::anyhow!("resource factory not found"))?
+        .deserialize_fn)(ptr.as_mut(), value);
+
+    Ok(())
 }

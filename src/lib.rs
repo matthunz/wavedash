@@ -4,10 +4,9 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
-use wavedash_core::{Request, Response};
 
 pub use wavedash_macros::main;
 
@@ -19,7 +18,14 @@ pub mod prelude {
 extern "C" {
     fn __wavedash_log(ptr: i32, len: i32) -> i32;
 
-    fn __wavedash_request(ptr: i32, len: i32) -> i32;
+    fn __wavedash_get_resource(type_path_ptr: i32, type_path_len: i32) -> i32;
+
+    fn __wavedash_set_resource(
+        type_path_ptr: i32,
+        type_path_len: i32,
+        value_ptr: i32,
+        value_len: i32,
+    ) -> i32;
 }
 
 thread_local! {
@@ -47,12 +53,26 @@ extern "C" fn __wavedash_run_system(id: i32) {
         .unwrap();
 }
 
-fn request(req: &Request) -> Response {
-    let s = CString::new(serde_json::to_string(req).unwrap()).unwrap();
-    let ptr = unsafe { __wavedash_request(s.as_ptr() as _, s.as_bytes().len() as i32) };
+pub fn dbg(s: impl fmt::Debug) {
+    log(&format!("{:?}", s));
+}
+
+pub fn log(s: impl fmt::Display) {
+    let msg = s.to_string();
+    let bytes = msg.as_bytes();
+    unsafe {
+        __wavedash_log(bytes.as_ptr() as _, bytes.len() as i32);
+    }
+}
+
+pub fn get_resource(type_path: String) -> serde_json::Value {
+    let type_path_bytes = type_path.as_bytes();
+    let ptr = unsafe {
+        __wavedash_get_resource(type_path_bytes.as_ptr() as _, type_path_bytes.len() as i32)
+    };
 
     let s = unsafe { CStr::from_ptr(ptr as _) }.to_str().unwrap();
-    let response = serde_json::from_str(s).unwrap();
+    let json = serde_json::from_str(s).unwrap();
 
     STORAGE
         .try_with(|storage| {
@@ -60,15 +80,21 @@ fn request(req: &Request) -> Response {
         })
         .unwrap();
 
-    response
+    json
 }
 
-pub fn dbg(s: impl fmt::Debug) {
-    request(&Request::Log(format!("{:?}", s)));
-}
+pub fn set_resource(type_path: String, value: serde_json::Value) {
+    let type_path_bytes = type_path.as_bytes();
+    let value_bytes = serde_json::to_vec(&value).unwrap();
 
-pub fn log(s: impl fmt::Display) {
-    request(&Request::Log(s.to_string()));
+    unsafe {
+        __wavedash_set_resource(
+            type_path_bytes.as_ptr() as _,
+            type_path_bytes.len() as i32,
+            value_bytes.as_ptr() as _,
+            value_bytes.len() as i32,
+        );
+    }
 }
 
 type SystemFn = Box<dyn FnMut(&mut World)>;
@@ -104,11 +130,8 @@ impl World {
         R: Resource + TypePath + DeserializeOwned,
     {
         let type_path = R::type_path().to_string();
-        let res = request(&Request::GetResource { type_path });
-        match res {
-            Response::Resource(json) => serde_json::from_value(json).unwrap(),
-            _ => unimplemented!(),
-        }
+        let json = get_resource(type_path);
+        serde_json::from_value(json).unwrap()
     }
 
     pub fn resource_mut<'a, R>(&'a mut self) -> ResourceMut<'a, R>
@@ -116,17 +139,11 @@ impl World {
         R: Resource + DeserializeOwned + Serialize + TypePath,
     {
         let type_path = R::type_path().to_string();
-        let res = request(&Request::GetResource {
-            type_path: type_path.clone(),
-        });
-
-        match res {
-            Response::Resource(json) => ResourceMut {
-                resource: serde_json::from_value(json).unwrap(),
-                type_path,
-                _world: self,
-            },
-            _ => unimplemented!(),
+        let json = get_resource(type_path.clone());
+        ResourceMut {
+            resource: serde_json::from_value(json).unwrap(),
+            type_path,
+            _world: self,
         }
     }
 }
@@ -153,10 +170,10 @@ impl<R: Serialize> DerefMut for ResourceMut<'_, R> {
 
 impl<R: Serialize> Drop for ResourceMut<'_, R> {
     fn drop(&mut self) {
-        request(&Request::SetResource {
-            type_path: self.type_path.clone(),
-            value: serde_json::to_value(&self.resource).unwrap(),
-        });
+        set_resource(
+            self.type_path.clone(),
+            serde_json::to_value(&self.resource).unwrap(),
+        );
     }
 }
 
