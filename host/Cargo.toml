@@ -1,0 +1,7 @@
+[package]
+name = "wavedash-host"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wasmtime = "40.0.0"
