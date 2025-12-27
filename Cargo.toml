@@ -6,11 +6,18 @@ edition = "2024"
 [workspace]
 members = [
   ".",
+  "crates/core",
   "crates/host",
   "crates/macros",
   "example",
+  "example/crates/core",
   "example/crates/host",
 ]
 
 [dependencies]
+bevy_ecs = "0.17.3"
+bevy_reflect = "0.17.3"
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
+wavedash-core = { path = "crates/core" }
 wavedash-macros = { path = "crates/macros" }

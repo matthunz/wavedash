@@ -11,8 +11,9 @@ pub fn main(input: TokenStream, attrs: TokenStream) -> TokenStream {
         #input
 
         #[unsafe(no_mangle)]
-        extern "C" fn __wavedash_main() {
-            main()
+        extern "C" fn __wavedash_main(world_ptr: i64) {
+            let mut world = unsafe { World::new(world_ptr) };
+            main(&mut world)
         }
     }
     .into()

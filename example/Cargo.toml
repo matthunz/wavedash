@@ -8,3 +8,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wavedash = { path = "../" }
+wavedash-example-core = { path = "crates/core" }
