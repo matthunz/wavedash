@@ -1,12 +1,16 @@
 [package]
 name = "wavedash"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [workspace]
 members = [
   ".",
-  "host"
+  "crates/host",
+  "crates/macros",
+  "example",
+  "example/crates/host",
 ]
 
 [dependencies]
+wavedash-macros = { path = "crates/macros" }

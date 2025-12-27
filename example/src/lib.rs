@@ -1,0 +1,2 @@
+#[wavedash::main]
+fn main() {}

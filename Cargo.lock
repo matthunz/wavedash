@@ -1606,12 +1606,38 @@ dependencies = [
 [[package]]
 name = "wavedash"
 version = "0.1.0"
+dependencies = [
+ "wavedash-macros",
+]
+
+[[package]]
+name = "wavedash-example"
+version = "0.1.0"
+dependencies = [
+ "wavedash",
+]
+
+[[package]]
+name = "wavedash-example-host"
+version = "0.1.0"
+dependencies = [
+ "wavedash-host",
+]
 
 [[package]]
 name = "wavedash-host"
 version = "0.1.0"
 dependencies = [
  "wasmtime",
+]
+
+[[package]]
+name = "wavedash-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
